@@ -5,7 +5,7 @@ from google.oauth2 import service_account
 
 # Load Google Vision credentials
 creds = service_account.Credentials.from_service_account_info(
-    st.secrets["google_application_credentials"]
+    st.secrets["gcp_service_account"]
 )
 client = vision.ImageAnnotatorClient(credentials=creds)
 
