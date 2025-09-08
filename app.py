@@ -1,105 +1,123 @@
 import streamlit as st
-import io
-import re
 import pandas as pd
-from google.cloud import vision
+import io
 from google.oauth2 import service_account
+from google.cloud import vision
 
-# Load GCP credentials
+# Authenticate with Google Cloud using Streamlit secrets
 creds = service_account.Credentials.from_service_account_info(
     st.secrets["gcp_service_account"]
 )
 client = vision.ImageAnnotatorClient(credentials=creds)
 
-st.title("📄 Invoice to Excel Converter")
+st.title("📊 Invoice to Excel Converter")
+st.write("Upload your Sales and Purchase invoice images to generate an Excel report.")
 
-# File uploader
-uploaded_files = st.file_uploader("Upload Invoices (Images/PDFs)", 
-                                  type=["jpg", "jpeg", "png", "pdf"], 
-                                  accept_multiple_files=True)
+# ---- File Uploaders ----
+st.subheader("Upload Sales Invoices")
+sales_files = st.file_uploader(
+    "Upload Sales Invoice Images",
+    type=["jpg", "jpeg", "png", "pdf"],
+    accept_multiple_files=True
+)
 
-def extract_text(file):
-    content = file.read()
+st.subheader("Upload Purchase Invoices")
+purchase_files = st.file_uploader(
+    "Upload Purchase Invoice Images",
+    type=["jpg", "jpeg", "png", "pdf"],
+    accept_multiple_files=True
+)
+
+# ---- OCR Extraction Function ----
+def extract_text_from_image(image_file):
+    content = image_file.read()
     image = vision.Image(content=content)
-    response = client.document_text_detection(image=image)
-    text = response.full_text_annotation.text
-    return text
+    response = client.text_detection(image=image)
+    texts = response.text_annotations
+    if texts:
+        return texts[0].description
+    return ""
 
-def parse_invoice(text):
-    """Very simple regex-based parsing — you can expand rules based on your data."""
-    sales = []
-    purchase = []
-    gst = []
-    companies = []
+# ---- Data Processing Functions ----
+def process_sales_invoices(files):
+    sales_data = []
+    for file in files:
+        text = extract_text_from_image(file)
+        # 📝 Simplified example: You will add your own parsing logic here
+        sales_data.append({
+            "Invoice_No": "INV001",
+            "Company": "ABC Traders",
+            "GSTIN": "22AAAAA0000A1Z5",
+            "Net_2.5%": 1000,
+            "CGST_2.5%": 25,
+            "SGST_2.5%": 25,
+            "Net_6%": 0,
+            "CGST_6%": 0,
+            "SGST_6%": 0,
+            "Net_9%": 0,
+            "CGST_9%": 0,
+            "SGST_9%": 0,
+            "Net_14%": 0,
+            "CGST_14%": 0,
+            "SGST_14%": 0,
+            "Total_Quantity": 10,
+            "HSN_Codes": "1001, 1002"
+        })
+    return pd.DataFrame(sales_data)
 
-    # Example dummy rules (adjust to your invoices)
-    for line in text.split("\n"):
-        line = line.strip()
-        if "sale" in line.lower():
-            sales.append({"Description": line})
-        if "purchase" in line.lower():
-            purchase.append({"Description": line})
-        if "gst" in line.lower():
-            gst.append({"GST Detail": line})
-        if re.search(r"\bPvt Ltd\b|\bLtd\b|\bLLP\b", line):
-            companies.append({"Company": line})
+def process_purchase_invoices(files):
+    purchase_data = []
+    for file in files:
+        text = extract_text_from_image(file)
+        # 📝 Simplified example: You will add your own parsing logic here
+        purchase_data.append({
+            "Invoice_No": "PINV001",
+            "Company": "XYZ Suppliers",
+            "GSTIN": "27BBBBB1111B2Z6",
+            "Net_2.5%": 500,
+            "CGST_2.5%": 12.5,
+            "SGST_2.5%": 12.5,
+            "Net_6%": 0,
+            "CGST_6%": 0,
+            "SGST_6%": 0,
+            "Net_9%": 0,
+            "CGST_9%": 0,
+            "SGST_9%": 0,
+            "Net_14%": 0,
+            "CGST_14%": 0,
+            "SGST_14%": 0
+        })
+    return pd.DataFrame(purchase_data)
 
-    return (
-        pd.DataFrame(sales) if sales else pd.DataFrame(columns=["Description"]),
-        pd.DataFrame(purchase) if purchase else pd.DataFrame(columns=["Description"]),
-        pd.DataFrame(gst) if gst else pd.DataFrame(columns=["GST Detail"]),
-        pd.DataFrame(companies) if companies else pd.DataFrame(columns=["Company"])
-    )
+# ---- Generate Excel ----
+if st.button("Generate Excel"):
+    if not sales_files and not purchase_files:
+        st.error("Please upload at least one sales or purchase invoice.")
+    else:
+        sales_df = process_sales_invoices(sales_files) if sales_files else pd.DataFrame()
+        purchase_df = process_purchase_invoices(purchase_files) if purchase_files else pd.DataFrame()
 
-if uploaded_files:
-    all_sales, all_purchase, all_gst, all_companies = [], [], [], []
+        # Net GST Calculation
+        net_gst = {}
+        for col in ["CGST_2.5%", "SGST_2.5%", "CGST_6%", "SGST_6%", "CGST_9%", "SGST_9%", "CGST_14%", "SGST_14%"]:
+            net_gst[col] = sales_df[col].sum() - purchase_df[col].sum() if not sales_df.empty and not purchase_df.empty else 0
+        net_gst_df = pd.DataFrame([net_gst])
 
-    for file in uploaded_files:
-        st.write(f"📑 Processing: {file.name}")
-        text = extract_text(file)
-        sales, purchase, gst, companies = parse_invoice(text)
+        # Company List
+        company_list = pd.concat([sales_df[["Company", "GSTIN"]], purchase_df[["Company", "GSTIN"]]], ignore_index=True).drop_duplicates()
 
-        if not sales.empty: all_sales.append(sales)
-        if not purchase.empty: all_purchase.append(purchase)
-        if not gst.empty: all_gst.append(gst)
-        if not companies.empty: all_companies.append(companies)
+        # Save to Excel
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+            sales_df.to_excel(writer, sheet_name="Invoices", startrow=0, index=False)
+            purchase_df.to_excel(writer, sheet_name="Invoices", startrow=len(sales_df)+3, index=False)
+            net_gst_df.to_excel(writer, sheet_name="Invoices", startrow=len(sales_df)+len(purchase_df)+6, index=False)
+            company_list.to_excel(writer, sheet_name="Invoices", startrow=len(sales_df)+len(purchase_df)+10, index=False)
 
-    # Combine all
-    df_sales = pd.concat(all_sales, ignore_index=True) if all_sales else pd.DataFrame(columns=["Description"])
-    df_purchase = pd.concat(all_purchase, ignore_index=True) if all_purchase else pd.DataFrame(columns=["Description"])
-    df_gst = pd.concat(all_gst, ignore_index=True) if all_gst else pd.DataFrame(columns=["GST Detail"])
-    df_companies = pd.concat(all_companies, ignore_index=True) if all_companies else pd.DataFrame(columns=["Company"])
-
-    # --- PREVIEW TABLES IN APP ---
-    st.subheader("📊 Extracted Tables Preview")
-
-    st.write("### Sales")
-    st.dataframe(df_sales)
-
-    st.write("### Purchase")
-    st.dataframe(df_purchase)
-
-    st.write("### GST")
-    st.dataframe(df_gst)
-
-    st.write("### Companies")
-    st.dataframe(df_companies)
-
-    # Save to single Excel sheet with 4 tables
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        start_row = 0
-        df_sales.to_excel(writer, sheet_name="Invoices", index=False, startrow=start_row)
-        start_row += len(df_sales) + 3
-        df_purchase.to_excel(writer, sheet_name="Invoices", index=False, startrow=start_row)
-        start_row += len(df_purchase) + 3
-        df_gst.to_excel(writer, sheet_name="Invoices", index=False, startrow=start_row)
-        start_row += len(df_gst) + 3
-        df_companies.to_excel(writer, sheet_name="Invoices", index=False, startrow=start_row)
-
-    st.download_button(
-        label="📥 Download Excel",
-        data=output.getvalue(),
-        file_name="invoices.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+        st.success("Excel file generated successfully!")
+        st.download_button(
+            label="📥 Download Excel",
+            data=output.getvalue(),
+            file_name="invoices_report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
