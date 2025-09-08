@@ -1,1 +1,7 @@
 
+streamlit
+pandas
+openpyxl
+google-cloud-vision
+pytesseract
+Pillow
